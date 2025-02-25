@@ -1,0 +1,155 @@
+### "onGEO GEOVisualization Course: Census API and WebMapping script"
+## Kyle Redican 7/2022
+
+
+###################################################################################
+### First step in any project is to set your working directory
+### Working directory is just a fancy way of saying where you are keeping and saving the data
+### By setting the working directory you can easily save without having to add more code
+### setwd() function sets the working directory that you identify for you
+setwd("folder path")
+
+### Libraries
+### Libraries are essentially the software packages that provide the functions 
+### That you will use to manipulate and change the data
+# Tidyverse is a library that is used to manipulate data in an easy to use cross sectional approach
+library(tidyverse)
+#Tidy Census is the library that connects to the Census API and allows you to pull the data
+library(tidycensus)
+# GGPLOT2 is one of the most popular data visualization packages.  You can make maps and anytype of plot you might want
+library(ggplot2)
+# Hmisc is another library that helps with the data manipulation
+library(Hmisc)
+# SF is the simple features library that allows you work with the spatial datatype of simple features
+library(sf)
+# Leaflet Gives the base map
+library(leaflet)
+# Stringr
+library(stringr)
+# Allows us to export ogetur leaflet map
+library(htmlwidgets)
+
+### Part 1 Finding your Census Variables
+# First you will need to install your census api
+# The census API should have been gotten from https://api.census.gov/data/key_signup.html
+# using the census_api_key function here put in your api key.  
+# If you want to not have to do this every time you want to download census data, then add the second argument of install=TRUE.  If you choose this, then you might need to restart R. 
+census_api_key("2c1fb355d78d52ff1b20706580f42c8ac89e74ef")
+#alternative would be census_api_key("YOUR API KEY GOES HERE", install=TRUE)
+
+
+
+# Loading the Possible Census Variables -----------------------------------
+# Now we need to load the variables to determine which ones would be the best for us.
+# using the load_variables() function to load an dataframe that tells you the codes for the variables we want to extract.
+# First we will load the American Community Survey (ACS) 5 year estimates 2016-2020(last available ACS with tidycensus).
+# First argument is the year,second is the dataset (acs is the complete ACS dataset), and third is just left as cache=false
+ACS<-load_variables(2020,
+                    "acs5",
+                    cache=FALSE)
+
+
+# Check out what it brought back.  Looks like 27,040 observations of 3 variables
+head(ACS)
+# now lets open the dataframe and catch all the codes for the topic you are most interested in.
+view(ACS)
+
+
+
+### Let's grab some variables
+### Race/ethnicity variables come in counts of the population
+### Since it is counts, that is only going to pick up on the most populated areas and not based on concentration
+### Due to this issue, we are going to have to do a simple calculation
+
+# EXAMPLE 1- Grabbing the White alone population and turning it into a %
+### Using the get ACS Function we can get these counts
+#First we define the list of variables that we want to pull and give them better names then the code
+# To make the list it just your objectlistname <- then c() which means combine items into a vector.  Then inside the c() you are defining your items and names.
+# Since the names from the census API are those codes that don't have a lot of meaning, we give it meaning with the MHI =, where that code will be saved with the name MHI
+Variables<-c(MHI = "B19013_001", # Median Household Income
+             ForeignBorn = "B05002_013", # Foreign born population
+             Totalpop = "B01003_001") # Total Population
+TampaMSACT<-get_acs(geography = "tract",  #Defining the spatial scale
+                variables = Variables, #grabbing the variables we defined previously
+                survey = "acs5",      # survey we are pulling is the ACS 5 year estimates
+                year = 2020,   # End year for the 5 year estimates- 2016-2020
+                output = "wide", # data format wide (cross sectional)
+                state="FL", # Define which State you want to pull data from
+                county= c("Hillsborough","Pinellas"), # Defining the counties in the state that the data will come from
+                geometry=T) # Pulls the spatial data information with it.
+
+
+# First 10 records/observations return
+head(TampaMSACT)
+
+# summary() provides an overview of the data
+summary(TampaMSACT)
+
+# Lets clean up this data a little bit before we go too far
+# Here we are just pulling out the columns we care about using the indexing dataframe[,c("column name","etc")]
+Tampa<-TampaMSACT[,c("GEOID", "NAME", "MHIE", "ForeignBornE", "TotalpopE", "geometry")]
+# Easy renaming of the variables
+names(Tampa)[names(Tampa) =="MHIE"]<-"MHI"
+names(Tampa)[names(Tampa) =="ForeignBornE"]<-"ForeignBorn"
+names(Tampa)[names(Tampa) =="TotalpopE"]<-"Totalpop"
+
+
+### Setting up the color palletes
+DpalMHI<-colorQuantile(palette = "RdYlGn", domain=Tampa$MHI, n=10)
+DpalForeignBorn <- colorQuantile(palette = "PuOr", domain = Tampa$ForeignBorn, n = 10)
+Dpalpop<-colorQuantile(palette = "plasma", domain=Tampa$Totalpop, n=10)
+Detmap<-Tampa %>% # Data set you want to map and the '%>%' is a piping command which makes it keep moving forward 
+  st_transform(crs = "+init=epsg:4326") %>% # Setting the projection of our simple feature spatial dataframe to match the webmapping application
+  leaflet() %>%  # Leaflet function which puts this all in motion
+  setView(lng = -82.46, lat = 27.95, zoom = 8)%>% # the lng and lat set the center point, while zoom chooses how zoomed in it is
+  addTiles(group = "OSM (default)") %>%  #This sets the base map and the following addProviderTiles() are optional otehr basemaps
+  addProviderTiles(providers$Stadia.StamenTonerLite, group = "Toner Lite") %>%
+  addProviderTiles(providers$CartoDB.Positron, group = "Carto B") %>%
+  addPolygons(group = "Total", #Add polygons is how we choose what we want to map.
+              popup = paste("Census Tract: ", Tampa$NAME, "<br>", #Pop up provides the pop up information if we were to click on the county, paste() pastes all the text together
+                            "Total Population: ", Tampa$Totalpop, "<br>", # <br> is html code for new line.   
+                            "Median Household Income: ", "$", Tampa$MHI, "<br>",
+                            "Foreign Born Population: ", Tampa$ForeignBorn, "<br>"),
+              stroke = FALSE,
+              smoothFactor = 0,
+              fillOpacity = 0.7,
+              color = ~ Dpalpop(Totalpop)) %>% #Color palette or what the color scheme is.  You made these earlier and they need to match
+  addLegend(position = "bottomleft", pal=Dpalpop, values= Tampa$Totalpop, #Legend for this polygon layer
+            title="Percentile of Census Tract Total Population", group = "Total", opacity = 1) %>% 
+  addPolygons(group = "MHI", #Next layer with the same set up as before.  We could add as many as the computer would let us. 
+              popup = paste("Census Tract: ", Tampa$NAME, "<br>",
+                            "Total Population: ", Tampa$Totalpop, "<br>",
+                            "Median Household Income: ", "$", Tampa$MHI, "<br>",
+                            "Foreign Born Population: ", Tampa$ForeignBorn, "<br>"),
+              stroke = FALSE,
+              smoothFactor = 0,
+              fillOpacity = 0.7,
+              color = ~ DpalMHI(MHI)) %>%
+  addLegend(position = "bottomright", pal=DpalMHI, values= Tampa$MHI, 
+            title="Percentile of Census Tract Median Household Income", group = "MHI", opacity = 1) %>% 
+  addPolygons(group = "ForeignBorn",
+              popup = paste("Census Tract: ", Tampa$NAME, "<br>",
+                            "Total Population: ", Tampa$Totalpop, "<br>",
+                            "Median Household Income: ", "$", Tampa$MHI, "<br>",
+                            "Foreign Born Population: ", Tampa$ForeignBorn, "<br>"),
+              stroke = FALSE,
+              smoothFactor = 0,
+              fillOpacity = 0.7,
+              color = ~ DpalForeignBorn(ForeignBorn)) %>%
+  addLegend(position = "bottomleft", pal=DpalForeignBorn, values= Tampa$ForeignBorn, 
+            title="Percentile of Census Tract Foreign Born Population", group = "ForeignBorn", opacity = 1) %>% 
+  # Here we hide two of the groups so that only one shows on loading
+  hideGroup("MHI") %>% # Hides the MHI layer so it doesn't all pop up at load
+  hideGroup("ForeignBorn") %>% # Hides the ForeignBorn layer so it all doesn't pop up at the load
+  addLayersControl(  #Gives you the option to turn on and off different basemaps or layers.
+    baseGroups = c("OSM (default)", "Toner Lite", "Carto B"),
+    overlayGroups = c("Total", "MHI", "ForeignBorn"),
+    options = layersControlOptions(collapsed = FALSE))
+
+
+Detmap # loads the map you just made, this will take awhile
+
+# Saving the Html map
+# first argument is the leaflet map, second is the file name and extension, and final is whether it is selfcontained
+# The space needed for the self contained file is a lot which is why we reduced it down to just one layer.
+saveWidget(Detmap, file="Detmap.html", selfcontained = T)
